@@ -11,6 +11,9 @@ import { WebSearchModal } from './components/WebSearchModal';
 import { AppControlModal } from './components/AppControlModal';
 import { HistoryItem } from './types/terminal';
 import { soundFX } from './utils/audio';
+import { routeUserCommand } from './services/commandRouter';
+import { streamGeminiResponse, ChatMessageMemory } from './services/geminiService';
+import { fetchApiConfig } from './services/configService';
 
 const INITIAL_LOGS: HistoryItem[] = [
   { id: 'init-1', source: 'SYSTEM', text: 'JARVIS INITIALIZED' },
@@ -26,6 +29,18 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isWebSearchOpen, setIsWebSearchOpen] = useState<boolean>(false);
   const [isAppControlOpen, setIsAppControlOpen] = useState<boolean>(false);
+  const [apiConnectionStatus, setApiConnectionStatus] = useState<string>('Connected');
+
+  // Load real API connection status on mount
+  useEffect(() => {
+    fetchApiConfig()
+      .then((cfg) => {
+        setApiConnectionStatus(cfg.status);
+      })
+      .catch(() => {
+        setApiConnectionStatus('Error');
+      });
+  }, []);
 
   // Helper to append system logs into the unified history
   const addSystemLog = (text: string) => {
@@ -52,42 +67,98 @@ export default function App() {
 
   // Handle typed command/message inside the single unified history panel
   const handleSendCommand = (cmd: string) => {
-    if (!cmd.trim()) return;
+    const cleanCmd = cmd.trim();
+    if (!cleanCmd) return;
 
     const userEntry: HistoryItem = {
       id: 'usr-' + Date.now(),
       source: 'USER',
-      text: cmd.trim(),
+      text: cleanCmd,
     };
 
     setLogs((prev) => [...prev, userEntry]);
-    setIsProcessing(true);
 
-    // Prepare area for future JARVIS response beneath the user message
-    setTimeout(() => {
-      setIsProcessing(false);
-
-      const lower = cmd.toLowerCase().trim();
-      let jarvisReply = 'Input received. AI service integration will connect here.';
-
-      if (lower === 'hello' || lower === 'hi' || lower === 'hey' || lower.includes('jarvis')) {
-        jarvisReply = 'Greetings. Systems online and listening.';
-      } else if (lower.includes('status') || lower.includes('system') || lower.includes('health')) {
-        jarvisReply = 'All subsystem diagnostics nominal.';
-      } else if (lower.startsWith('what is') || lower.startsWith('how') || lower.startsWith('why') || lower.endsWith('?')) {
-        jarvisReply = 'Inquiry logged. Neural response module pending backend connection.';
-      } else {
-        jarvisReply = `Directive "${cmd}" noted. Awaiting command service connection.`;
+    // Step 1: Check Command Router for instant local handling (time, world time, dates, battery, shortcuts)
+    const commandCheck = routeUserCommand(cleanCmd);
+    if (commandCheck.isCommand) {
+      if (commandCheck.action === 'RESET_TERMINAL') {
+        setLogs(INITIAL_LOGS);
+        return;
+      }
+      if (commandCheck.action === 'OPEN_SETTINGS') {
+        setIsSettingsOpen(true);
+      } else if (commandCheck.action === 'OPEN_WEB_SEARCH') {
+        setIsWebSearchOpen(true);
+      } else if (commandCheck.action === 'OPEN_APP_CONTROL') {
+        setIsAppControlOpen(true);
       }
 
-      const jarvisEntry: HistoryItem = {
-        id: 'jarvis-' + Date.now(),
-        source: 'JARVIS',
-        text: jarvisReply,
-      };
+      if (commandCheck.reply) {
+        const jarvisEntry: HistoryItem = {
+          id: 'jarvis-' + Date.now(),
+          source: 'JARVIS',
+          text: commandCheck.reply,
+        };
+        setLogs((prev) => [...prev, jarvisEntry]);
+      }
+      return;
+    }
 
-      setLogs((prev) => [...prev, jarvisEntry]);
-    }, 450);
+    // Step 2: Route general inquiries to Gemini AI Brain with streaming & 10-message memory
+    setIsProcessing(true);
+
+    // Filter memory to the last 10 conversational turns (USER and JARVIS)
+    const conversationMemory: ChatMessageMemory[] = logs
+      .filter((item) => item.source === 'USER' || item.source === 'JARVIS')
+      .slice(-10)
+      .map((item) => ({
+        role: item.source === 'USER' ? 'user' : 'model',
+        text: item.text,
+      }));
+
+    const responseId = 'jarvis-' + Date.now();
+
+    streamGeminiResponse(
+      cleanCmd,
+      conversationMemory,
+      // onChunk: stream received text progressively
+      (accumulatedText) => {
+        setIsProcessing(false);
+        setLogs((prev) => {
+          const index = prev.findIndex((item) => item.id === responseId);
+          if (index !== -1) {
+            const updated = [...prev];
+            updated[index] = { ...updated[index], text: accumulatedText };
+            return updated;
+          } else {
+            return [
+              ...prev,
+              {
+                id: responseId,
+                source: 'JARVIS',
+                text: accumulatedText,
+              },
+            ];
+          }
+        });
+      },
+      // onError: show concise Bengali error message without crashing
+      (errorMessage) => {
+        setIsProcessing(false);
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: 'err-' + Date.now(),
+            source: 'JARVIS',
+            text: errorMessage,
+          },
+        ]);
+      },
+      // onComplete: finalize streaming
+      () => {
+        setIsProcessing(false);
+      }
+    );
   };
 
   // Handle Web Search query simulation into unified history
@@ -167,7 +238,7 @@ export default function App() {
             <StatusList 
               isVoiceActive={isVoiceActive} 
               voiceStatus="Standby"
-              networkStatus="Connected"
+              networkStatus={apiConnectionStatus}
               batteryLevel={78}
             />
           </div>
@@ -201,6 +272,7 @@ export default function App() {
         soundEnabled={soundEnabled}
         onToggleSound={() => setSoundEnabled((prev) => !prev)}
         onResetTerminal={() => setLogs(INITIAL_LOGS)}
+        onConfigChange={(newCfg) => setApiConnectionStatus(newCfg.status)}
       />
 
       <WebSearchModal

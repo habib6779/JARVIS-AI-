@@ -46,16 +46,17 @@ export const TerminalLog: React.FC<TerminalLogProps> = ({ logs, isProcessing = f
             {item.source === 'JARVIS' && (
               <div className="flex items-start gap-1.5 pl-2 border-l border-cyan-400/40 my-0.5">
                 <span className="text-[#00e5ff] font-bold shrink-0">JARVIS:</span>
-                <span className="text-cyan-100 glow-text-cyan break-words">{item.text}</span>
+                <span className="text-cyan-100 glow-text-cyan break-words whitespace-pre-wrap">{item.text}</span>
               </div>
             )}
           </div>
         ))}
 
-        {/* Quiet processing notice when input is submitted */}
+        {/* Processing notice showing typing status */}
         {isProcessing && (
-          <div className="text-[10px] sm:text-[11px] text-cyan-400/70 font-rajdhani tracking-widest uppercase">
-            [PROCESSING INPUT DIRECTIVE...]
+          <div className="text-[11px] sm:text-xs text-cyan-400 font-rajdhani tracking-wider flex items-center gap-1.5 animate-pulse pl-2 border-l border-cyan-400/40 my-0.5">
+            <span className="text-[#00e5ff] font-bold">JARVIS:</span>
+            <span className="text-cyan-200">টাইপ করছে...</span>
           </div>
         )}
       </div>
